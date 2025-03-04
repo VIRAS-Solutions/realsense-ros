@@ -111,6 +111,7 @@ BaseRealSenseNode::BaseRealSenseNode(rclcpp::Node& node,
     _camera_time_base(0),
     _sync_frames(SYNC_FRAMES),
     _enable_rgbd(ENABLE_RGBD),
+    _enable_rgbd_pose(ENABLE_RGBD_POSE),
     _is_color_enabled(false),
     _is_depth_enabled(false),
     _is_accel_enabled(false),
@@ -132,6 +133,9 @@ BaseRealSenseNode::BaseRealSenseNode(rclcpp::Node& node,
 
     initializeFormatsMaps();
     _monitor_options = {RS2_OPTION_ASIC_TEMPERATURE, RS2_OPTION_PROJECTOR_TEMPERATURE};
+
+    this->tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->_node.get_clock());
+    this->tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*this->tf_buffer_);
 }
 
 BaseRealSenseNode::~BaseRealSenseNode()
@@ -613,6 +617,15 @@ void BaseRealSenseNode::frame_callback(rs2::frame frame)
                 auto color_format = original_color_frame.get_profile().format();
                 auto depth_format = original_depth_frame.get_profile().format();
                 publishRGBD(_images[COLOR], color_format, _depth_aligned_image[COLOR], depth_format, t);
+                
+            }
+
+            if(_enable_rgbd_pose && original_color_frame)
+            {
+                auto color_format = original_color_frame.get_profile().format();
+                auto depth_format = original_depth_frame.get_profile().format();
+                publishRGBDWithPose(_images[COLOR], color_format, _depth_aligned_image[COLOR], depth_format, t);
+                
             }  
         }
     }
@@ -992,7 +1005,7 @@ void BaseRealSenseNode::publishFrame(
         cv::Mat image_cv_matrix;
 
         // if rgbd has subscribers we fetch the CV image here
-        if (_rgbd_publisher && 0 != _rgbd_publisher->get_subscription_count())
+        if ((_rgbd_publisher && 0 != _rgbd_publisher->get_subscription_count()) || (_rgbd_pose_publisher && _rgbd_pose_publisher->get_subscription_count() !=0))
         {
             if (fillCVMatImageAndReturnStatus(f, images, width, height, stream))
             {
@@ -1042,7 +1055,7 @@ void BaseRealSenseNode::publishFrame(
         // If rgbd has subscribers, get the camera info of color/detph sensors from _camera_info map.
         // We need this camera info to fill the rgbd msg, regardless if there subscribers to depth/color camera info.
         // We are not publishing this cam_info here, but will be published by rgbd publisher.
-        if (_rgbd_publisher && 0 != _rgbd_publisher->get_subscription_count())
+        if ((_rgbd_publisher && 0 != _rgbd_publisher->get_subscription_count())||(_rgbd_pose_publisher && 0 != _rgbd_pose_publisher->get_subscription_count()))
         {
             auto& cam_info = _camera_info.at(stream);
 
@@ -1087,7 +1100,7 @@ void BaseRealSenseNode::publishRGBD(
     const rs2_format& depth_format,
     const rclcpp::Time& t)
 {
-    if (_rgbd_publisher && 0 != _rgbd_publisher->get_subscription_count())
+    if ((_rgbd_publisher && 0 != _rgbd_publisher->get_subscription_count())||(_rgbd_pose_publisher && 0 != _rgbd_pose_publisher->get_subscription_count()))
     {
         ROS_DEBUG_STREAM("Publishing RGBD message");
         unsigned int rgb_width = rgb_cv_matrix.size().width;
@@ -1123,6 +1136,71 @@ void BaseRealSenseNode::publishRGBD(
         realsense2_camera_msgs::msg::RGBD *msg_address = msg.get();
         _rgbd_publisher->publish(std::move(msg));
         ROS_DEBUG_STREAM("rgbd stream published, message address: " << std::hex << msg_address);
+    }
+}
+
+void BaseRealSenseNode::publishRGBDWithPose(
+    const cv::Mat& rgb_cv_matrix,
+    const rs2_format& color_format,
+    const cv::Mat& depth_cv_matrix,
+    const rs2_format& depth_format,
+    const rclcpp::Time& t)
+{
+    if (_rgbd_pose_publisher && 0 != _rgbd_pose_publisher->get_subscription_count())
+    {
+        ROS_DEBUG_STREAM("Publishing ImageRGBD message");
+        unsigned int rgb_width = rgb_cv_matrix.size().width;
+        unsigned int rgb_height = rgb_cv_matrix.size().height;
+        unsigned int depth_width = depth_cv_matrix.size().width;
+        unsigned int depth_height = depth_cv_matrix.size().height;
+
+        cv_msgs::msg::ImageRGBD::UniquePtr msg_pose(new cv_msgs::msg::ImageRGBD());
+
+        bool rgb_message_filled = fillROSImageMsgAndReturnStatus(rgb_cv_matrix, COLOR, rgb_width, rgb_height, color_format, t, &msg_pose->rgb_image);
+        if(!rgb_message_filled)
+        {
+            ROS_ERROR_STREAM("Failed to fill rgb message inside ImageRGBD message");
+            return;
+        }
+
+        bool depth_messages_filled = fillROSImageMsgAndReturnStatus(depth_cv_matrix, DEPTH, depth_width, depth_height, depth_format, t, &msg_pose->depth_image);
+        if(!depth_messages_filled)
+        {
+            ROS_ERROR_STREAM("Failed to fill depth message inside ImageRGBD message");
+            return;
+        }
+
+        msg_pose->header.frame_id = "camera_rgbd_optical_frame";
+        msg_pose->header.stamp = this->_node.get_clock()->now();
+
+        auto rgb_camera_info = _camera_info.at(COLOR);
+        msg_pose->rgb_camera_info = rgb_camera_info;
+        
+        auto depth_camera_info = _camera_info.at(DEPTH);
+        msg_pose->depth_camera_info = depth_camera_info;
+
+        msg_pose->is_depth = true;
+
+        try
+        {
+            geometry_msgs::msg::TransformStamped transformation_stamped = this->tf_buffer_->lookupTransform("panda_link0", "camera_link", tf2::TimePointZero);
+            msg_pose->record_pose.header = transformation_stamped.header;
+            msg_pose->record_pose.pose.position.x = transformation_stamped.transform.translation.x;
+            msg_pose->record_pose.pose.position.y = transformation_stamped.transform.translation.y;
+            msg_pose->record_pose.pose.position.z = transformation_stamped.transform.translation.z;
+            msg_pose->record_pose.pose.orientation.x = transformation_stamped.transform.rotation.x;
+            msg_pose->record_pose.pose.orientation.y = transformation_stamped.transform.rotation.y;
+            msg_pose->record_pose.pose.orientation.z = transformation_stamped.transform.rotation.z;
+            msg_pose->record_pose.pose.orientation.w = transformation_stamped.transform.rotation.w;
+        }
+        catch(const std::exception& e)
+        {
+            ROS_DEBUG_STREAM("couldn't receivce transformation from panda_link0 to camera_link");
+        }
+
+        cv_msgs::msg::ImageRGBD *msg_address = msg_pose.get();
+        _rgbd_pose_publisher->publish(std::move(msg_pose));
+        ROS_DEBUG_STREAM("rgbd stream with pose published, message address: " << std::hex << msg_address);
     }
 }
 

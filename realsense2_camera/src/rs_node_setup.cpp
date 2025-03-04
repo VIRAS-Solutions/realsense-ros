@@ -346,6 +346,26 @@ void BaseRealSenseNode::startRGBDPublisherIfNeeded()
         }
     }
 }
+void BaseRealSenseNode::startImageRGBDPublisherIfNeeded()
+{
+    _rgbd_pose_publisher.reset();
+    if(_enable_rgbd_pose && !_rgbd_pose_publisher)
+    {
+        if (_sync_frames && _is_color_enabled && _is_depth_enabled && _align_depth_filter->is_enabled())
+        {
+            rmw_qos_profile_t qos = _use_intra_process ? qos_string_to_qos(DEFAULT_QOS) : qos_string_to_qos(IMAGE_QOS);
+
+            // adding "~/" to the topic name will add node namespace and node name to the topic
+            // see "Private Namespace Substitution Character" section on https://design.ros2.org/articles/topic_and_service_names.html
+            _rgbd_pose_publisher = _node.create_publisher<cv_msgs::msg::ImageRGBD>("~/CV/Image",
+                rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(qos), qos));
+        }
+        else {
+            ROS_ERROR("In order to get rgbd topic enabled, "\
+             "you should enable: color stream, depth stream, sync_mode and align_depth");
+        }
+    }
+}
 
 void BaseRealSenseNode::updateSensors()
 {
@@ -481,6 +501,7 @@ void BaseRealSenseNode::startUpdatedSensors()
             publishStaticTransforms();
         }
         startRGBDPublisherIfNeeded();
+        startImageRGBDPublisherIfNeeded();
     }
     catch(const std::exception& ex)
     {

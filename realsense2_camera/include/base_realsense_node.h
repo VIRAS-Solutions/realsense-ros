@@ -40,9 +40,15 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/static_transform_broadcaster.h>
+#include "tf2_ros/buffer.h"
+#include "tf2_ros/transform_listener.h"
 #include <eigen3/Eigen/Geometry>
 #include <condition_variable>
 
@@ -57,6 +63,8 @@
 #include <mutex>
 #include <atomic>
 #include <thread>
+
+#include <cv_msgs/msg/image_rgbd.hpp>
 
 using realsense2_camera_msgs::msg::Extrinsics;
 using realsense2_camera_msgs::msg::IMUInfo;
@@ -173,7 +181,7 @@ namespace realsense2_camera
         class CimuData
         {
             public:
-                CimuData() : m_time_ns(-1) {};
+                CimuData() : m_data({0,0,0}), m_time_ns(-1) {};
                 CimuData(const stream_index_pair type, Eigen::Vector3d data, double time):
                     m_type(type),
                     m_data(data),
@@ -241,6 +249,13 @@ namespace realsense2_camera
             const cv::Mat& depth_cv_matrix,
             const rs2_format& depth_format,
             const rclcpp::Time& t);
+            
+        void publishRGBDWithPose(
+            const cv::Mat& rgb_cv_matrix,
+            const rs2_format& color_format,
+            const cv::Mat& depth_cv_matrix,
+            const rs2_format& depth_format,
+            const rclcpp::Time& t);
 
         void publishMetadata(rs2::frame f, const rclcpp::Time& header_time, const std::string& frame_id);
 
@@ -265,6 +280,7 @@ namespace realsense2_camera
         void publishServices();
         void startPublishers(const std::vector<rs2::stream_profile>& profiles, const RosSensor& sensor);
         void startRGBDPublisherIfNeeded();
+        void startImageRGBDPublisherIfNeeded();
         void stopPublishers(const std::vector<rs2::stream_profile>& profiles);
 
 #if defined (ACCELERATE_GPU_WITH_GLSL)
@@ -297,6 +313,8 @@ namespace realsense2_camera
         std::shared_ptr<tf2_ros::TransformBroadcaster> _dynamic_tf_broadcaster;
         std::vector<geometry_msgs::msg::TransformStamped> _static_tf_msgs;
         std::shared_ptr<std::thread> _tf_t;
+        std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+        std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
         bool _use_intra_process;      
         std::map<stream_index_pair, std::shared_ptr<image_publisher>> _image_publishers;
@@ -308,6 +326,7 @@ namespace realsense2_camera
         std::map<stream_index_pair, rclcpp::Publisher<IMUInfo>::SharedPtr> _imu_info_publishers;
         std::map<stream_index_pair, rclcpp::Publisher<Extrinsics>::SharedPtr> _extrinsics_publishers;
         rclcpp::Publisher<realsense2_camera_msgs::msg::RGBD>::SharedPtr _rgbd_publisher;
+        rclcpp::Publisher<cv_msgs::msg::ImageRGBD>::SharedPtr _rgbd_pose_publisher;
         std::map<stream_index_pair, cv::Mat> _images;
         std::map<rs2_format, std::string> _rs_format_to_ros_format;
         std::map<rs2_format, int> _rs_format_to_cv_format;
@@ -319,6 +338,7 @@ namespace realsense2_camera
         rclcpp::Time _ros_time_base;
         bool _sync_frames;
         bool _enable_rgbd;
+        bool _enable_rgbd_pose;
         bool _is_color_enabled;
         bool _is_depth_enabled;
         bool _is_accel_enabled;
