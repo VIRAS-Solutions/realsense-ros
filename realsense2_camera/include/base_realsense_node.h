@@ -49,6 +49,7 @@
 #include <tf2_ros/static_transform_broadcaster.h>
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
+#include <rclcpp_action/rclcpp_action.hpp>
 #include <eigen3/Eigen/Geometry>
 #include <condition_variable>
 
@@ -65,6 +66,8 @@
 #include <thread>
 
 #include <cv_msgs/msg/image_rgbd.hpp>
+#include <cv_msgs/action/camera_capturing.hpp>
+
 
 using realsense2_camera_msgs::msg::Extrinsics;
 using realsense2_camera_msgs::msg::IMUInfo;
@@ -258,6 +261,25 @@ namespace realsense2_camera
             const rclcpp::Time& t);
 
         void publishMetadata(rs2::frame f, const rclcpp::Time& header_time, const std::string& frame_id);
+        
+        // Action server
+        rclcpp_action::Server<cv_msgs::action::CameraCapturing>::SharedPtr _camera_capturing_action_server;
+        std::atomic<bool> _action_running;
+        std::chrono::steady_clock::time_point _action_start_time;
+
+        void setupCameraCapturingAction();
+        rclcpp_action::GoalResponse handleCameraCapturingGoal(
+            const rclcpp_action::GoalUUID& uuid,
+            std::shared_ptr<const cv_msgs::action::CameraCapturing::Goal> goal);
+        rclcpp_action::CancelResponse handleCameraCapturingCancel(
+                std::shared_ptr<rclcpp_action::ServerGoalHandle<cv_msgs::action::CameraCapturing>> goal_handle);
+        void handleCameraCapturingAccepted(
+            std::shared_ptr<rclcpp_action::ServerGoalHandle<cv_msgs::action::CameraCapturing>> goal_handle);
+        void executeCameraCapturingAction(
+            std::shared_ptr<rclcpp_action::ServerGoalHandle<cv_msgs::action::CameraCapturing>> goal_handle);
+        void sendCameraCapturingFeedback(
+            std::shared_ptr<rclcpp_action::ServerGoalHandle<cv_msgs::action::CameraCapturing>> goal_handle);
+
 
         sensor_msgs::msg::Imu CreateUnitedMessage(const CimuData accel_data, const CimuData gyro_data);
 
@@ -277,6 +299,8 @@ namespace realsense2_camera
         void updateSensors();
         void startUpdatedSensors();
         void stopRequiredSensors();
+        void enableAllStreams();   
+        void disableAllStreams();
         void publishServices();
         void startPublishers(const std::vector<rs2::stream_profile>& profiles, const RosSensor& sensor);
         void startRGBDPublisherIfNeeded();

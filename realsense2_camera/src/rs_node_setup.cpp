@@ -104,7 +104,7 @@ void BaseRealSenseNode::setAvailableSensors()
     }
     else
         ROS_INFO("JSON file is not provided");
-
+   
     auto device_name = _dev.get_info(RS2_CAMERA_INFO_NAME);
     ROS_INFO_STREAM("Device Name: " << device_name);
 

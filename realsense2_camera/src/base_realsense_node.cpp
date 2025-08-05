@@ -23,6 +23,7 @@
 // Header files for disabling intra-process comms for static broadcaster.
 #include <rclcpp/publisher_options.hpp>
 #include <tf2_ros/qos.hpp>
+#include <thread>
 
 using namespace realsense2_camera;
 
@@ -119,7 +120,9 @@ BaseRealSenseNode::BaseRealSenseNode(rclcpp::Node& node,
     _pointcloud(false),
     _imu_sync_method(imu_sync_method::NONE),
     _is_profile_changed(false),
+    _action_running(false), // Action server state
     _is_align_depth_changed(false)
+
 #if defined (ACCELERATE_GPU_WITH_GLSL)
     ,_app(1280, 720, "RS_GLFW_Window"),
     _accelerate_gpu_with_glsl(false),
@@ -176,9 +179,212 @@ void BaseRealSenseNode::hardwareResetRequest()
 void BaseRealSenseNode::publishTopics()
 {
     getParameters();
+    disableAllStreams();
     setup();
+    setupCameraCapturingAction();  // Initialize the action server for camera capturing
     ROS_INFO_STREAM("RealSense Node Is Up!");
 }
+
+// This function sets up the action server for camera capturing.
+void BaseRealSenseNode::setupCameraCapturingAction()
+{
+    _camera_capturing_action_server = rclcpp_action::create_server<cv_msgs::action::CameraCapturing>(
+        &_node, 
+        "camera_capturing",
+        std::bind(&BaseRealSenseNode::handleCameraCapturingGoal, this, std::placeholders::_1, std::placeholders::_2),
+        std::bind(&BaseRealSenseNode::handleCameraCapturingCancel, this, std::placeholders::_1),
+        std::bind(&BaseRealSenseNode::handleCameraCapturingAccepted, this, std::placeholders::_1));
+        
+    ROS_INFO("Camera capturing action server ready");
+}
+
+
+void BaseRealSenseNode::handleCameraCapturingAccepted(
+    std::shared_ptr<rclcpp_action::ServerGoalHandle<cv_msgs::action::CameraCapturing>> goal_handle)
+{
+    // Führe Action in separatem Thread aus
+    std::thread execute_thread([this, goal_handle]() {
+        executeCameraCapturingAction(goal_handle);
+    });
+    execute_thread.detach();
+}
+
+rclcpp_action::GoalResponse BaseRealSenseNode::handleCameraCapturingGoal(
+    const rclcpp_action::GoalUUID& uuid,
+    std::shared_ptr<const cv_msgs::action::CameraCapturing::Goal> goal)
+{
+    ROS_INFO("Received camera capturing goal request");
+    
+    // Nur start_capture: true akzeptieren
+    if (!goal->start_capture) {
+        ROS_WARN("Goal rejected: start_capture must be true. Use cancellation to stop capturing.");
+        return rclcpp_action::GoalResponse::REJECT;
+    }
+    
+    // Prüfen ob bereits eine Action läuft
+    if (_action_running) {
+        ROS_WARN("Goal rejected: Camera capturing already running. Use cancellation to stop current capturing.");
+        return rclcpp_action::GoalResponse::REJECT;
+    }
+    
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse BaseRealSenseNode::handleCameraCapturingCancel(
+    std::shared_ptr<rclcpp_action::ServerGoalHandle<cv_msgs::action::CameraCapturing>> goal_handle)
+{
+    ROS_INFO("Received request to cancel camera capturing");
+    _action_running = false;
+    return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void BaseRealSenseNode::executeCameraCapturingAction(
+    std::shared_ptr<rclcpp_action::ServerGoalHandle<cv_msgs::action::CameraCapturing>> goal_handle)
+{
+    const auto goal = goal_handle->get_goal();
+    auto feedback = std::make_shared<cv_msgs::action::CameraCapturing::Feedback>();
+    auto result = std::make_shared<cv_msgs::action::CameraCapturing::Result>();
+    
+    ROS_INFO("Starting camera capturing - enabling sensors");
+    
+    try {
+        enableAllStreams();   // Setzt interne Flags
+        updateSensors();      // Nutzt bestehende RealSense Logik
+        
+        _action_running = true;
+        _action_start_time = std::chrono::steady_clock::now();
+        
+        ROS_INFO("Camera sensors started successfully - now publishing topics");
+        
+        // Feedback Loop - jede Sekunde
+        auto last_feedback_time = std::chrono::steady_clock::now();
+        const auto feedback_interval = std::chrono::seconds(1);
+        
+        while (rclcpp::ok() && _action_running) {
+            
+            // Prüfe auf Cancellation
+            if (goal_handle->is_canceling()) {
+                ROS_INFO("Stopping camera sensors due to cancellation request");
+                
+                // Nutze bestehende Methoden für sauberes Stoppen
+                disableAllStreams();  // Neue Hilfsmethode
+                updateSensors();      // Bestehende Methode - stoppt Sensoren basierend auf Parametern
+                
+                // WICHTIG: Hardware-Pause nach dem Stoppen
+                ROS_INFO("Waiting for hardware to settle...");
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                
+                _action_running = false;
+                result->success = true;
+                result->message = "Camera capturing cancelled successfully - sensors stopped cleanly";
+                goal_handle->canceled(result);
+                return;
+            }
+            
+            auto now = std::chrono::steady_clock::now();
+            
+            // Feedback senden
+            if (now - last_feedback_time >= feedback_interval) {
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - _action_start_time);
+                feedback->uptime = elapsed.count() / 1000.0;
+                
+                goal_handle->publish_feedback(feedback);
+                ROS_INFO_STREAM("Camera capturing uptime: " << feedback->uptime << " seconds");
+                last_feedback_time = now;
+            }
+            
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        
+    } catch (const std::exception& e) {
+        ROS_ERROR_STREAM("Failed to start camera sensors: " << e.what());
+        
+        // Bei Fehler: Sensoren sauber stoppen
+        try {
+            disableAllStreams();
+            updateSensors();
+        } catch (...) {
+            ROS_ERROR("Failed to stop sensors after error");
+        }
+        
+        _action_running = false;
+        result->success = false;
+        result->message = std::string("Failed to start sensors: ") + e.what();
+        goal_handle->abort(result);
+        return;
+    }
+    
+    // Normale Beendigung (sollte eigentlich nicht erreicht werden)
+    ROS_INFO("Camera capturing completed normally - stopping sensors");
+    disableAllStreams();
+    updateSensors();
+    
+    _action_running = false;
+    result->success = true;
+    result->message = "Camera capturing completed successfully";
+    goal_handle->succeed(result);
+}
+
+// Neue Hilfsmethoden die die bestehenden Parameter nutzen
+
+void BaseRealSenseNode::enableAllStreams()
+{
+    ROS_INFO("Enabling camera streams (using existing launch parameters)");
+    
+    _enable[COLOR] = true;
+    _enable[DEPTH] = true;
+    _enable[INFRA1] = false;
+    _enable[INFRA2] = false;
+    _enable[GYRO] = false;
+    _enable[ACCEL] = false;
+    
+    // Sync und RGBD Flags
+    _sync_frames = true;
+    _enable_rgbd = true;
+    _enable_rgbd_pose = true;
+    
+    if (_align_depth_filter) {
+        _is_align_depth_changed = true;
+    }
+
+    // Trigger Parameter Update für andere Module
+    {
+        std::lock_guard<std::mutex> lock_guard(_profile_changes_mutex);
+        _is_profile_changed = true;
+    }
+    _cv_mpc.notify_one();
+    
+    ROS_INFO("Camera streams enabled via internal flags");
+}
+
+void BaseRealSenseNode::disableAllStreams()
+{
+    ROS_INFO("Disabling camera streams");
+    
+    // Alle Streams deaktivieren
+    _enable[COLOR] = false;
+    _enable[DEPTH] = false;
+    _enable[INFRA1] = false;
+    _enable[INFRA2] = false;
+    _enable[GYRO] = false;
+    _enable[ACCEL] = false;
+    
+    // Sync und RGBD deaktivieren
+    _sync_frames = false;
+    _enable_rgbd = false;
+    _enable_rgbd_pose = false;
+
+    // Trigger Profile Change für sauberes Stoppen
+    {
+        std::lock_guard<std::mutex> lock_guard(_profile_changes_mutex);
+        _is_profile_changed = true;
+    }
+    _cv_mpc.notify_one();
+    
+    ROS_INFO("Camera streams disabled via internal flags");
+}
+
+
 
 void BaseRealSenseNode::initializeFormatsMaps()
 {
@@ -522,6 +728,11 @@ void BaseRealSenseNode::imu_callback(rs2::frame frame)
 
 void BaseRealSenseNode::frame_callback(rs2::frame frame)
 {
+    // If action is running, we set the start time to the current time.
+    if (_action_running && _action_start_time == std::chrono::steady_clock::time_point{}) {
+        _action_start_time = std::chrono::steady_clock::now();
+    }
+    
     if (_synced_imu_publisher)
         _synced_imu_publisher->Pause();
     double frame_time = frame.get_timestamp();

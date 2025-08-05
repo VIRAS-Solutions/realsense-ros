@@ -116,7 +116,8 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(diagnostic_updater REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core)
-find_package(cv_msgs)
+find_package(cv_msgs REQUIRED)
+find_package(rclcpp_action REQUIRED)
 
 find_package(realsense2 2.55.1)
 if (BUILD_ACCELERATE_GPU_WITH_GLSL)
@@ -243,6 +244,7 @@ set(dependencies
   image_transport
   rclcpp
   rclcpp_components
+  rclcpp_action
   realsense2_camera_msgs
   std_msgs
   sensor_msgs

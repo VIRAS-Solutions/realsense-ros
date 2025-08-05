@@ -315,6 +315,9 @@ User can set the camera name and camera namespace, to distinguish between camera
 > ros2 service list
 /camera/camera/device_info
 ```
+> ros2 action list
+/camera/camera_capturing
+(ros2 action send_goal /camera/camera_capturing cv_msgs/action/CameraCapturing "{start_capture: true}")
 
 <hr>
 
