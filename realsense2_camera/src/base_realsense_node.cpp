@@ -190,7 +190,7 @@ void BaseRealSenseNode::setupCameraCapturingAction()
 {
     _camera_capturing_action_server = rclcpp_action::create_server<cv_msgs::action::CameraCapturing>(
         &_node, 
-        "camera_capturing",
+        "/camera_capturing",
         std::bind(&BaseRealSenseNode::handleCameraCapturingGoal, this, std::placeholders::_1, std::placeholders::_2),
         std::bind(&BaseRealSenseNode::handleCameraCapturingCancel, this, std::placeholders::_1),
         std::bind(&BaseRealSenseNode::handleCameraCapturingAccepted, this, std::placeholders::_1));
@@ -248,15 +248,15 @@ void BaseRealSenseNode::executeCameraCapturingAction(
     ROS_INFO("Starting camera capturing - enabling sensors");
     
     try {
-        enableAllStreams();   // Setzt interne Flags
-        updateSensors();      // Nutzt bestehende RealSense Logik
+        enableAllStreams();  
+        updateSensors();    
         
         _action_running = true;
         _action_start_time = std::chrono::steady_clock::now();
         
         ROS_INFO("Camera sensors started successfully - now publishing topics");
         
-        // Feedback Loop - jede Sekunde
+        // Feedback Loo
         auto last_feedback_time = std::chrono::steady_clock::now();
         const auto feedback_interval = std::chrono::seconds(1);
         
@@ -266,11 +266,9 @@ void BaseRealSenseNode::executeCameraCapturingAction(
             if (goal_handle->is_canceling()) {
                 ROS_INFO("Stopping camera sensors due to cancellation request");
                 
-                // Nutze bestehende Methoden für sauberes Stoppen
-                disableAllStreams();  // Neue Hilfsmethode
-                updateSensors();      // Bestehende Methode - stoppt Sensoren basierend auf Parametern
+                disableAllStreams(); 
+                updateSensors();     
                 
-                // WICHTIG: Hardware-Pause nach dem Stoppen
                 ROS_INFO("Waiting for hardware to settle...");
                 std::this_thread::sleep_for(std::chrono::seconds(2));
                 
@@ -299,7 +297,7 @@ void BaseRealSenseNode::executeCameraCapturingAction(
     } catch (const std::exception& e) {
         ROS_ERROR_STREAM("Failed to start camera sensors: " << e.what());
         
-        // Bei Fehler: Sensoren sauber stoppen
+        // Bei Fehler: Sensoren stoppen
         try {
             disableAllStreams();
             updateSensors();
@@ -314,7 +312,7 @@ void BaseRealSenseNode::executeCameraCapturingAction(
         return;
     }
     
-    // Normale Beendigung (sollte eigentlich nicht erreicht werden)
+    // Normale Beendigung
     ROS_INFO("Camera capturing completed normally - stopping sensors");
     disableAllStreams();
     updateSensors();
@@ -325,7 +323,6 @@ void BaseRealSenseNode::executeCameraCapturingAction(
     goal_handle->succeed(result);
 }
 
-// Neue Hilfsmethoden die die bestehenden Parameter nutzen
 
 void BaseRealSenseNode::enableAllStreams()
 {
