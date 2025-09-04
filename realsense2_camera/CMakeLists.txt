@@ -30,6 +30,8 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 option(BUILD_WITH_OPENMP "Use OpenMP" OFF)
 option(SET_USER_BREAK_AT_STARTUP "Set user wait point in startup (for debug)" OFF)
+# Define an option to enable or disable lifecycle nodes
+option(USE_LIFECYCLE_NODE "Enable lifecycle nodes (ON/OFF)" ON)
 
 # Compiler Defense Flags
 if(UNIX OR APPLE)
@@ -65,7 +67,7 @@ if(UNIX OR APPLE)
   # Generic flags.
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fno-operator-names -Wformat -Wformat-security -Wall")
   # Dot not forward c++ flag to GPU beucause it is not supported
-  set( CUDA_PROPAGATE_HOST_FLAGS OFF )
+  set(CUDA_PROPAGATE_HOST_FLAGS OFF)
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -D_FORTIFY_SOURCE=2")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -pie")
 endif()
@@ -75,30 +77,30 @@ if(WIN32)
 endif()
 
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
+  set(CMAKE_BUILD_TYPE Release)
 endif()
 
 string(TOUPPER "${CMAKE_BUILD_TYPE}" uppercase_CMAKE_BUILD_TYPE)
-if (${uppercase_CMAKE_BUILD_TYPE} STREQUAL "RELEASE")
-    message(STATUS "Create Release Build.")
-    set(CMAKE_CXX_FLAGS "-O2 ${CMAKE_CXX_FLAGS}")
+if(${uppercase_CMAKE_BUILD_TYPE} STREQUAL "RELEASE")
+  message(STATUS "Create Release Build.")
+  set(CMAKE_CXX_FLAGS "-O2 ${CMAKE_CXX_FLAGS}")
 else()
-    message(STATUS "Create Debug Build.")
+  message(STATUS "Create Debug Build.")
 endif()
 
 if(BUILD_WITH_OPENMP)
-    find_package(OpenMP)
-    if(NOT OpenMP_FOUND)
-        message(FATAL_ERROR "\n\n OpenMP is missing!\n\n")
-    else()
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS} -fopenmp")
-        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
-    endif()
+  find_package(OpenMP)
+  if(NOT OpenMP_FOUND)
+    message(FATAL_ERROR "\n\n OpenMP is missing!\n\n")
+  else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS} -fopenmp")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+  endif()
 endif()
 
 if(SET_USER_BREAK_AT_STARTUP)
-    message("GOT FLAG IN CmakeLists.txt")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DBPDEBUG")
+  message("GOT FLAG IN CmakeLists.txt")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DBPDEBUG")
 endif()
 
 
@@ -119,42 +121,46 @@ find_package(OpenCV REQUIRED COMPONENTS core)
 find_package(cv_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
 
+
 find_package(realsense2 2.55.1)
-if (BUILD_ACCELERATE_GPU_WITH_GLSL)
+if(BUILD_ACCELERATE_GPU_WITH_GLSL)
   find_package(realsense2-gl 2.55.1)
 endif()
 if(NOT realsense2_FOUND)
-    message(FATAL_ERROR "\n\n Intel RealSense SDK 2.0 is missing, please install it from https://github.com/IntelRealSense/librealsense/releases\n\n")
+  message(FATAL_ERROR "\n\n Intel RealSense SDK 2.0 is missing, please install it from https://github.com/IntelRealSense/librealsense/releases\n\n")
 endif()
 
 #set(CMAKE_NO_SYSTEM_FROM_IMPORTED true)
-include_directories(include)
+include_directories(
+  include
+  /franka_ros2_ws/src/logging_cpp
+)
 
-include_directories(${OpenCV_INCLUDE_DIRS})  # add OpenCV includes to the included dirs
+include_directories(${OpenCV_INCLUDE_DIRS}) # add OpenCV includes to the included dirs
 
 set(node_plugins "")
 
 set(SOURCES
-    src/realsense_node_factory.cpp
-    src/base_realsense_node.cpp
-    src/parameters.cpp
-    src/rs_node_setup.cpp
-    src/ros_sensor.cpp
-    src/ros_utils.cpp
-    src/dynamic_params.cpp
-    src/sensor_params.cpp
-    src/named_filter.cpp
-    src/profile_manager.cpp
-    src/image_publisher.cpp
-    src/tfs.cpp
-  )
+  src/realsense_node_factory.cpp
+  src/base_realsense_node.cpp
+  src/parameters.cpp
+  src/rs_node_setup.cpp
+  src/ros_sensor.cpp
+  src/ros_utils.cpp
+  src/dynamic_params.cpp
+  src/sensor_params.cpp
+  src/named_filter.cpp
+  src/profile_manager.cpp
+  src/image_publisher.cpp
+  src/tfs.cpp
+)
 
-if (BUILD_ACCELERATE_GPU_WITH_GLSL)
+if(BUILD_ACCELERATE_GPU_WITH_GLSL)
   list(APPEND SOURCES src/gl_gpu_processing.cpp)
 endif()
 
 if(NOT DEFINED ENV{ROS_DISTRO})
-  message(FATAL_ERROR "ROS_DISTRO is not defined." )
+  message(FATAL_ERROR "ROS_DISTRO is not defined.")
 endif()
 if("$ENV{ROS_DISTRO}" STREQUAL "foxy")
   message(STATUS "Build for ROS2 Foxy")
@@ -191,28 +197,28 @@ if(${rclcpp_VERSION} VERSION_GREATER_EQUAL "17.0")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DRCLCPP_HAS_OnSetParametersCallbackType")
 endif()
 
-if (BUILD_ACCELERATE_GPU_WITH_GLSL)
+if(BUILD_ACCELERATE_GPU_WITH_GLSL)
   add_definitions(-DACCELERATE_GPU_WITH_GLSL)
 endif()
 
 set(INCLUDES
-    include/constants.h
-    include/realsense_node_factory.h
-    include/base_realsense_node.h
-    include/ros_sensor.h
-    include/ros_utils.h
-    include/dynamic_params.h
-    include/sensor_params.h
-    include/named_filter.h
-    include/ros_param_backend.h
-    include/profile_manager.h
-    include/image_publisher.h)
+  include/constants.h
+  include/realsense_node_factory.h
+  include/base_realsense_node.h
+  include/ros_sensor.h
+  include/ros_utils.h
+  include/dynamic_params.h
+  include/sensor_params.h
+  include/named_filter.h
+  include/ros_param_backend.h
+  include/profile_manager.h
+  include/image_publisher.h)
 
-if (BUILD_ACCELERATE_GPU_WITH_GLSL)
+if(BUILD_ACCELERATE_GPU_WITH_GLSL)
   list(APPEND INCLUDES include/gl_window.h)
 endif()
 
-if (BUILD_TOOLS)
+if(BUILD_TOOLS)
 
   include_directories(tools)
   set(INCLUDES ${INCLUDES}
@@ -223,20 +229,20 @@ if (BUILD_TOOLS)
 endif()
 
 add_library(${PROJECT_NAME} SHARED
-    ${INCLUDES}
-    ${SOURCES}
+  ${INCLUDES}
+  ${SOURCES}
 )
 
-if (BUILD_ACCELERATE_GPU_WITH_GLSL)
+if(BUILD_ACCELERATE_GPU_WITH_GLSL)
   set(link_libraries ${realsense2-gl_LIBRARY})
 else()
   set(link_libraries ${realsense2_LIBRARY})
 endif()
 
-list(APPEND link_libraries ${OpenCV_LIBS})  # add OpenCV libs to link_libraries
+list(APPEND link_libraries ${OpenCV_LIBS}) # add OpenCV libs to link_libraries
 
 target_link_libraries(${PROJECT_NAME}
-    ${link_libraries}
+  ${link_libraries}
 )
 
 set(dependencies
@@ -255,10 +261,29 @@ set(dependencies
   cv_msgs
 )
 
-if (BUILD_ACCELERATE_GPU_WITH_GLSL)
+if(BUILD_ACCELERATE_GPU_WITH_GLSL)
   list(APPEND dependencies realsense2-gl)
 else()
   list(APPEND dependencies realsense2)
+endif()
+
+# If the flag is enabled, define the macro
+if(USE_LIFECYCLE_NODE)
+  find_package(rclcpp_lifecycle REQUIRED)
+  find_package(lifecycle_msgs REQUIRED)
+  list(APPEND dependencies rclcpp_lifecycle lifecycle_msgs)
+  list(APPEND targets
+    rclcpp_lifecycle::rclcpp_lifecycle
+    lifecycle_msgs::lifecycle_msgs__rosidl_typesupport_cpp)
+  add_definitions(-DUSE_LIFECYCLE_NODE)
+  message("USE_LIFECYCLE_NODE is ENABLED")
+
+  # Create a configuration file for the launch file
+  file(WRITE "${CMAKE_BINARY_DIR}/global_settings.yaml"
+    "use_lifecycle_node: true\n")
+else()
+  file(WRITE "${CMAKE_BINARY_DIR}/global_settings.yaml"
+    "use_lifecycle_node: false\n")
 endif()
 
 ament_target_dependencies(${PROJECT_NAME}
@@ -273,8 +298,8 @@ rclcpp_components_register_node(${PROJECT_NAME}
 if(BUILD_TOOLS)
 
   rclcpp_components_register_node(${PROJECT_NAME}
-  PLUGIN "rs2_ros::tools::frame_latency::FrameLatencyNode"
-  EXECUTABLE realsense2_frame_latency_node
+    PLUGIN "rs2_ros::tools::frame_latency::FrameLatencyNode"
+    EXECUTABLE realsense2_frame_latency_node
   )
 
 endif()
@@ -293,15 +318,15 @@ install(
 )
 
 # Install launch files
-install(DIRECTORY 
-    launch
-    DESTINATION share/${PROJECT_NAME}
-    )
+install(DIRECTORY
+  launch
+  DESTINATION share/${PROJECT_NAME}
+)
 
 # Install example files
-install(DIRECTORY 
-    examples
-    DESTINATION share/${PROJECT_NAME}
+install(DIRECTORY
+  examples
+  DESTINATION share/${PROJECT_NAME}
 )
 
 # Test
@@ -313,16 +338,16 @@ if(BUILD_TESTING)
   foreach(test_folder ${_gtest_folders})
     file(GLOB files "${test_folder}/gtest_*.cpp")
     foreach(file ${files})
-       get_filename_component(_test_name ${file} NAME_WE)
-       ament_add_gtest(${_test_name} ${file})
-       target_include_directories(${_test_name} PUBLIC
-          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-          $<INSTALL_INTERFACE:include>
-       )
-       ament_target_dependencies(${_test_name}
-          std_msgs
-       )
-       #target_link_libraries(${_test_name} name_of_local_library)
+      get_filename_component(_test_name ${file} NAME_WE)
+      ament_add_gtest(${_test_name} ${file})
+      target_include_directories(${_test_name} PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+      )
+      ament_target_dependencies(${_test_name}
+        std_msgs
+      )
+      #target_link_libraries(${_test_name} name_of_local_library)
     endforeach()
   endforeach()
 
@@ -338,12 +363,12 @@ if(BUILD_TESTING)
     file(GLOB files "${test_folder}/test_*.py")
     foreach(file ${files})
 
-    get_filename_component(_test_name ${file} NAME_WE)
-    ament_add_pytest_test(${_test_name} ${file}
-      APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}:${CMAKE_SOURCE_DIR}/test/utils:${CMAKE_SOURCE_DIR}/launch:${CMAKE_SOURCE_DIR}/scripts
-      TIMEOUT 60
-      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
+      get_filename_component(_test_name ${file} NAME_WE)
+      ament_add_pytest_test(${_test_name} ${file}
+        APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}:${CMAKE_SOURCE_DIR}/test/utils:${CMAKE_SOURCE_DIR}/launch:${CMAKE_SOURCE_DIR}/scripts
+        TIMEOUT 60
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      )
     endforeach()
   endforeach()
 
@@ -351,9 +376,9 @@ if(BUILD_TESTING)
 
   set(rs_query_cmd "rs-enumerate-devices -s")
   execute_process(COMMAND bash -c ${rs_query_cmd}
-      WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-      RESULT_VARIABLE rs_result
-      OUTPUT_VARIABLE RS_DEVICE_INFO)
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    RESULT_VARIABLE rs_result
+    OUTPUT_VARIABLE RS_DEVICE_INFO)
   message(STATUS "rs_device_info:")
   message(STATUS "${RS_DEVICE_INFO}")
   if((RS_DEVICE_INFO MATCHES "D455") OR (RS_DEVICE_INFO MATCHES "D415") OR (RS_DEVICE_INFO MATCHES "D435"))
@@ -367,12 +392,12 @@ if(BUILD_TESTING)
     file(GLOB files "${test_folder}/test_*.py")
     foreach(file ${files})
 
-    get_filename_component(_test_name ${file} NAME_WE)
-    ament_add_pytest_test(${_test_name} ${file}
-      APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}:${CMAKE_SOURCE_DIR}/test/utils:${CMAKE_SOURCE_DIR}/launch:${CMAKE_SOURCE_DIR}/scripts
-      TIMEOUT 500
-      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
+      get_filename_component(_test_name ${file} NAME_WE)
+      ament_add_pytest_test(${_test_name} ${file}
+        APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}:${CMAKE_SOURCE_DIR}/test/utils:${CMAKE_SOURCE_DIR}/launch:${CMAKE_SOURCE_DIR}/scripts
+        TIMEOUT 500
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      )
     endforeach()
   endforeach()
 

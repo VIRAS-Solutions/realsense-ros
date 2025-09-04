@@ -92,7 +92,8 @@ size_t SyncedImuPublisher::getNumSubscribers()
 BaseRealSenseNode::BaseRealSenseNode(rclcpp::Node& node,
                                      rs2::device dev,
                                      std::shared_ptr<Parameters> parameters,
-                                     bool use_intra_process) :
+                                     bool use_intra_process) : 
+    UnifiedLogger("realsense_camera_node", "RealSense D435i", "Kamera"),
     _is_running(true),
     _node(node),
     _logger(node.get_logger()),
@@ -166,22 +167,48 @@ BaseRealSenseNode::~BaseRealSenseNode()
         {
             sensor->stop();
         }
+        logInfo(unified_logging::Category::HARDWARE,
+            "Sensors Stopped",
+            "All camera sensors have been successfully stopped");
     }
     catch(...){} // Not allowed to throw from Dtor
+}
+
+void BaseRealSenseNode::publishLogMessage(const cv_msgs::msg::LogMessage &log_msg)
+{
+    if (unified_log_pub_)
+    {
+        unified_log_pub_->publish(log_msg);
+    }
 }
 
 void BaseRealSenseNode::hardwareResetRequest()
 {
     ROS_ERROR_STREAM("Performing Hardware Reset.");
     _dev.hardware_reset();
+    logInfo(unified_logging::Category::HARDWARE,
+        "Hardware Reset Complete",
+        "Hardware reset completed successfully");
 }
 
 void BaseRealSenseNode::publishTopics()
 {
+    auto correlation_id = generateCorrelationId();
+    logInfo(unified_logging::Category::SYSTEM,
+        "Topic Setup",
+        "Starting topic publishers initialization",
+        correlation_id);
+
     getParameters();
     disableAllStreams();
     setup();
     setupCameraCapturingAction();  // Initialize the action server for camera capturing
+    unified_log_pub_ = _node.create_publisher<cv_msgs::msg::LogMessage>(
+        "/system/logs", 50);
+    logInfo(unified_logging::Category::OPERATIONAL_STATUS,
+        "Node Ready",
+        "RealSense node is fully operational and ready",
+        correlation_id);
     ROS_INFO_STREAM("RealSense Node Is Up!");
 }
 
@@ -194,7 +221,9 @@ void BaseRealSenseNode::setupCameraCapturingAction()
         std::bind(&BaseRealSenseNode::handleCameraCapturingGoal, this, std::placeholders::_1, std::placeholders::_2),
         std::bind(&BaseRealSenseNode::handleCameraCapturingCancel, this, std::placeholders::_1),
         std::bind(&BaseRealSenseNode::handleCameraCapturingAccepted, this, std::placeholders::_1));
-        
+    logInfo(unified_logging::Category::COMMUNICATION,
+        "Action Server Ready",
+        "Camera capturing action server initialized and ready to accept goals");
     ROS_INFO("Camera capturing action server ready");
 }
 
@@ -214,18 +243,35 @@ rclcpp_action::GoalResponse BaseRealSenseNode::handleCameraCapturingGoal(
     std::shared_ptr<const cv_msgs::action::CameraCapturing::Goal> goal)
 {
     ROS_INFO("Received camera capturing goal request");
+    auto correlation_id = generateCorrelationId();
+    logInfo(unified_logging::Category::COMMUNICATION,
+        "Action Goal Received",
+        "Camera capturing goal received with start_capture=" + std::to_string(goal->start_capture),
+        correlation_id);
     
     // Nur start_capture: true akzeptieren
     if (!goal->start_capture) {
         ROS_WARN("Goal rejected: start_capture must be true. Use cancellation to stop capturing.");
+        logWarning(unified_logging::Category::OPERATIONAL_STATUS,
+            "Goal Rejected",
+            "Camera capturing goal rejected - start_capture must be true",
+            correlation_id);
         return rclcpp_action::GoalResponse::REJECT;
     }
     
     // Prüfen ob bereits eine Action läuft
     if (_action_running) {
         ROS_WARN("Goal rejected: Camera capturing already running. Use cancellation to stop current capturing.");
+        logWarning(unified_logging::Category::OPERATIONAL_STATUS,
+            "Goal Rejected",
+            "Camera capturing goal rejected - capture already in progress",
+            correlation_id);
         return rclcpp_action::GoalResponse::REJECT;
     }
+    logInfo(unified_logging::Category::OPERATIONAL_STATUS,
+        "Goal Accepted",
+        "Camera capturing goal accepted and will be executed",
+        correlation_id);
     
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
@@ -234,6 +280,9 @@ rclcpp_action::CancelResponse BaseRealSenseNode::handleCameraCapturingCancel(
     std::shared_ptr<rclcpp_action::ServerGoalHandle<cv_msgs::action::CameraCapturing>> goal_handle)
 {
     ROS_INFO("Received request to cancel camera capturing");
+    logInfo(unified_logging::Category::OPERATIONAL_STATUS,
+        "Capture Cancel Request",
+        "Camera capturing cancellation requested");
     _action_running = false;
     return rclcpp_action::CancelResponse::ACCEPT;
 }
@@ -241,11 +290,16 @@ rclcpp_action::CancelResponse BaseRealSenseNode::handleCameraCapturingCancel(
 void BaseRealSenseNode::executeCameraCapturingAction(
     std::shared_ptr<rclcpp_action::ServerGoalHandle<cv_msgs::action::CameraCapturing>> goal_handle)
 {
+    auto correlation_id = generateCorrelationId();
     const auto goal = goal_handle->get_goal();
     auto feedback = std::make_shared<cv_msgs::action::CameraCapturing::Feedback>();
     auto result = std::make_shared<cv_msgs::action::CameraCapturing::Result>();
     
     ROS_INFO("Starting camera capturing - enabling sensors");
+    logInfo(unified_logging::Category::OPERATIONAL_STATUS,
+        "Capture Started",
+        "Camera capturing action execution started",
+        correlation_id);
     
     try {
         enableAllStreams();  
@@ -253,7 +307,12 @@ void BaseRealSenseNode::executeCameraCapturingAction(
         
         _action_running = true;
         _action_start_time = std::chrono::steady_clock::now();
-        
+
+        logInfo(unified_logging::Category::HARDWARE,
+            "Sensors Started",
+            "Camera sensors started successfully for capturing",
+            correlation_id);
+
         ROS_INFO("Camera sensors started successfully - now publishing topics");
         
         // Feedback Loo
@@ -265,6 +324,10 @@ void BaseRealSenseNode::executeCameraCapturingAction(
             // Prüfe auf Cancellation
             if (goal_handle->is_canceling()) {
                 ROS_INFO("Stopping camera sensors due to cancellation request");
+                logInfo(unified_logging::Category::OPERATIONAL_STATUS,
+                    "Capture Stopping",
+                    "Stopping camera capture due to cancellation",
+                    correlation_id);
                 
                 disableAllStreams(); 
                 updateSensors();     
@@ -275,6 +338,10 @@ void BaseRealSenseNode::executeCameraCapturingAction(
                 _action_running = false;
                 result->success = true;
                 result->message = "Camera capturing cancelled successfully - sensors stopped cleanly";
+                logInfo(unified_logging::Category::OPERATIONAL_STATUS,
+                    "Capture Cancelled",
+                    "Camera capturing cancelled successfully",
+                    correlation_id);
                 goal_handle->canceled(result);
                 return;
             }
@@ -296,6 +363,10 @@ void BaseRealSenseNode::executeCameraCapturingAction(
         
     } catch (const std::exception& e) {
         ROS_ERROR_STREAM("Failed to start camera sensors: " << e.what());
+        logError(unified_logging::Category::SAFETY,
+            "Sensor Start Failed",
+            "Failed to start camera sensors: " + std::string(e.what()),
+            correlation_id);
         
         // Bei Fehler: Sensoren stoppen
         try {
@@ -303,6 +374,10 @@ void BaseRealSenseNode::executeCameraCapturingAction(
             updateSensors();
         } catch (...) {
             ROS_ERROR("Failed to stop sensors after error");
+            logError(unified_logging::Category::SAFETY,
+                "Critical Error",
+                "Failed to stop sensors after error condition",
+                correlation_id);
         }
         
         _action_running = false;
@@ -321,13 +396,19 @@ void BaseRealSenseNode::executeCameraCapturingAction(
     result->success = true;
     result->message = "Camera capturing completed successfully";
     goal_handle->succeed(result);
+    logInfo(unified_logging::Category::OPERATIONAL_STATUS,
+        "Capture Completed",
+        "Camera capturing completed successfully",
+        correlation_id);
 }
 
 
 void BaseRealSenseNode::enableAllStreams()
 {
     ROS_INFO("Enabling camera streams (using existing launch parameters)");
-    
+    logInfo(unified_logging::Category::HARDWARE,
+        "Enabling Streams",
+        "Enabling color and depth camera streams");    
     _enable[COLOR] = true;
     _enable[DEPTH] = true;
     _enable[INFRA1] = false;
@@ -357,6 +438,9 @@ void BaseRealSenseNode::enableAllStreams()
 void BaseRealSenseNode::disableAllStreams()
 {
     ROS_INFO("Disabling camera streams");
+    logInfo(unified_logging::Category::HARDWARE,
+        "Disabling Streams",
+        "Disabling all camera streams");
     
     // Alle Streams deaktivieren
     _enable[COLOR] = false;
